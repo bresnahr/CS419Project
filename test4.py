@@ -9,7 +9,9 @@
 import npyscreen, curses
 import random
 import psycopg2
+from psycopg2.extensions import AsIs
 import psycopg2.extras
+import sys
 
 # $mysqli = new mysqli("oniddb.cws.oregonstate.edu", "goncharn-db", $myPassword, "goncharn-db");
 rowNumber = 5
@@ -38,14 +40,41 @@ class Database(object):
 		cursor.close()
 		return tables
 	
+	# returns list of all column names in the table	
+	def list_columns(self, table_name):
+		columns_list = []
+		conn = psycopg2.connect(con_string)
+		cur = conn.cursor()
+		cur.execute("SELECT column_name from information_schema.columns \
+				WHERE table_name = %s;", (table_name,))
+		columns_tuple = cur.fetchall()
+		cur.close()
+		# traverese tuple of tuples to list of strings
+		for col in columns_tuple:
+			col = list(col)
+			col[0] = col[0].strip("(),'")
+			columns_list.append(col[0])
+		return columns_list
 
-	def add_record(self, last_name = '', other_names='', email_address=''):
-		db = sqlite3.connect(self.dbfilename)
-        	c = db.cursor()
-        	c.execute('INSERT INTO records(last_name, other_names, email_address) \
-                	    VALUES(?,?,?)', (last_name, other_names, email_address))
-        	db.commit()
-        	c.close()
+	def list_records(self, table_name, sort_column, sort_direction, offset, limit):
+		conn = psycopg2.connect(con_string)
+		cur = conn.cursor()
+		cur.execute("SELECT * from %s ORDER BY %s %s OFFSET %s LIMIT %s;",\
+						(AsIs(table_name), AsIs(sort_column), AsIs(sort_direction), offset, limit))
+		rows = cur.fetchall()
+		return rows
+	
+	def closeConn(self):
+		self.conn.close()
+
+
+	def add_record(self, table_name, col_1, col_2, col_3, col_4, col_5):
+		conn = psycopg2.connect(con_string)
+        	cur = conn.cursor()
+        	cur.execute('INSERT INTO %s (%s, %s, %s, %s, %s) \
+                	    VALUES(%s, %s, %s, %s, %s)' % ("%s" % table_name, col_1, col_2, col_3, col_4, col_5,\
+				col_1.value, col_2.value, col_3.value, col_4.value, col_5.value))
+		cur.close()
     
 	def update_record(self, record_id, last_name = '', other_names='', email_address=''):
 		db = sqlite3.connect(self.dbfilename)
@@ -118,7 +147,9 @@ class TableList(npyscreen.MultiLineAction):
         #self.parent.parentApp.getForm('EDITRECORDFM').value = act_on_this[0]
         #parent.parentApp.switchForm('EDITRECORDFM')
 		selectedTableName = act_on_this[0]
-		self.parent.parentApp.getForm('Menu').selectTable = selectedTableName
+		self.parent.parentApp.myGridSet.table = selectedTableName
+		self.parent.parentApp.getForm('Menu').selectTable = selectedTableName	
+		self.parent.parentApp.getForm('Add Row').selectTable = selectedTableName
 		self.parent.parentApp.switchForm('Menu')
 
 		
@@ -166,6 +197,8 @@ class TableMenuForm(npyscreen.ActionForm):
 		else:
 			self.parentApp.setNextForm(None)
 		#self.parentApp.setNextFormPrevious()
+		
+		return selection
 	
 	# Create Widgets
 	def create(self):
@@ -193,16 +226,16 @@ class TableMenuForm(npyscreen.ActionForm):
 	def beforeEditing(self):
 		if self.selectTable:
 			self.name = "%s" % self.selectTable
-			theList = self.parentApp.myDatabase.list_all_records()
-			self.myGrid =  self.add(MyGrid, col_titles = ['1','2','3','4'])
-               		# populate the grid
-   	     		self.myGrid.values = []
+			self.theList = self.parentApp.myDatabase.list_all_records()
+			self.theGrid =  self.add(npyscreen.GridColTitles, relx=10, rely=15, width=95, col_titles=['1','2','3','4','5'],\
+						 column_width=10, col_margin=5, scroll_exit=True) #scroll_exit doesn't seem to work
+
+               		# initialize and populate the grid
+   	     		self.theGrid.values = []
 			myrow = []
-		
 			#get one record (row) and put that in the grid
 			theOne = self.parentApp.myDatabase.get_record()
-			self.myGrid.values.append(theOne)#[0]
-			
+			self.theGrid.values.append(theOne)#[0]
 
 			#the following are different tests for listing data from list_all_reccords
 			#currently left off at trying to figure out how to parse the tuple that is data comes in, which seems to be what get_record does
@@ -251,11 +284,108 @@ class AddRowForm(npyscreen.ActionForm):
 	# It's just prototype, non-dynamic
 	def create(self):
 		self.value = None
-		self.wgLastName   = self.add(npyscreen.TitleText, name = "Last Name:",)
-		self.wgOtherNames = self.add(npyscreen.TitleText, name = "Other Names:")
-		self.wgEmail      = self.add(npyscreen.TitleText, name = "Email:")
+		self.selectTable = None
+		self.myArr = None
+		self.myGrid =  self.add(MyGrid, col_titles = [], select_whole_line = True, max_height=12)#, scroll_exit = True)
+		
+	def beforeEditing(self):
+		if self.selectTable:
+			#self.name = "Table '%s'" % self.selectTable
+			self.columns_list = self.parentApp.myDatabase.list_columns(self.selectTable)
+			self.myGrid.col_titles = self.columns_list			
+
+			# update query params from DridSettings
+			self.limit = self.parentApp.myGridSet.limit
+			self.offset = self.parentApp.myGridSet.offset
+			self.sort_direction = self.parentApp.myGridSet.sort_direction
+			self.sort_column = self.parentApp.myGridSet.column
+			# when called with default settings
+			if self.sort_column == '':
+				self.sort_column = self.columns_list
+
+			self.myGrid.values = []
+			self.rows = []
+			self.myGrid.default_column_number = 5
+#			if len(self.columns_list) > 0:
+#				self.rows = self.parentApp.myDatabase.list_records(self.selectTable, self.sort_column, self.sort_direction, self.offset, self.limit)
+#			for row in self.rows:
+#				self.myGrid.values.append(row)		
+
+			self.myArr = {}
+		        k = 0
+                	x = 0
+                	while k < 10:
+                        	k = x
+                        	x += 1
+                        	value = x
+                        	self.myArr[k] = value
+                        	k += 1
+
+                        self.name = "%s" % self.selectTable
+			self.table = self.add(npyscreen.TitleText, name = "Add Row", editable = False)
+			
+			#for y in range (0,5):
+			#	z = str(self.myArr[y])
+			#	self.myArr[y] = self.add(npyscreen.TitleText, name = "Column " + z + ":")
+			#	y += 1
+
+			self.col_name = {}
+			for y in range (0, self.myGrid.default_column_number):
+				self.col_name[y] = self.columns_list[y]
+				self.col_name[y] = self.add(npyscreen.TitleText, name = self.col_name[y])   
+
+	def on_ok(self):
+		if self.selectTable:
+			self.parentApp.myDatabase.add_record(self.selectTable, self.col_name[0], self.col_name[1], self.col_name[2],\
+								 self.col_name[3], self.col_name[4])
+			
+'''*********************************************************
+   Class GridSettings inherits object
+   
+   Purpose:  Save current GridView pagination settings + table_name
+*********************************************************'''
+class GridSettings(object):
+	def __init__ (self):
+		self.limit = 3
+		self.sort_direction = 'ASC'
+		self.offset = 0
+		self.table = ''
+		self.column = ''
 
 
+# Form containing pagination settings
+class GridSetForm(npyscreen.ActionForm):
+	def afterEditing(self):
+		self.parentApp.myGridSet.limit = int(self.limitWidget.value)
+		self.parentApp.myGridSet.offset = int(self.offsetWidget.value)
+		self.parentApp.myGridSet.sort_direction = self.sortDirWidget.get_selected_objects()[0]
+		self.parentApp.myGridSet.column = self.columnWidget.get_selected_objects()[0]
+		self.parentApp.setNextFormPrevious()
+	
+	def create(self):
+		self.limitWidget = self.add(npyscreen.TitleText, name='Rows per page: ', begin_entry_at = 21, value = str(self.parentApp.myGridSet.limit))
+		self.nextrely += 1
+		self.offsetWidget = self.add(npyscreen.TitleText, name='Start at row #:', begin_entry_at = 21, value = str(self.parentApp.myGridSet.offset))
+		self.nextrely += 1
+		self.columnWidget = self.add(npyscreen.TitleSelectOne, max_height=5,
+									    name='Order by',
+										#values = [],
+										scroll_exit = True
+										 # Let the user move out of the widget by pressing 
+										# the down arrow instead of tab.  Try it without to see the difference.
+										)
+		self.nextrely += 1
+		self.sortDirWidget = self.add(npyscreen.TitleSelectOne, max_height=6,
+									    name='Sort',
+										values = ['ASC', 'DESC'],
+										scroll_exit = True
+										 # Let the user move out of the widget by pressing 
+										# the down arrow instead of tab.  Try it without to see the difference.
+										)
+
+	def beforeEditing(self):
+		if self.columns_list:
+			self.columnWidget.values = self.columns_list
 '''**************************************************
    Class MyApplication inherits NPSAppManaged class
    
@@ -265,9 +395,11 @@ class AddRowForm(npyscreen.ActionForm):
 class MyApplication(npyscreen.NPSAppManaged):
     def onStart(self):
 		self.myDatabase = Database()
+		self.myGridSet = GridSettings()
 		selTableF = self.addForm('MAIN', TableListDisplay, name='Select Table')
 		tabMenuF = self.addForm('Menu', TableMenuForm, name='Table Menu')
 		addRowF = self.addForm('Add Row', AddRowForm, name='Add Row')
+		GridSetF = self.addForm('GridSet', GridSetForm, name='Pagination Settings')
 
 if __name__ == '__main__':
     TestApp = MyApplication().run()
