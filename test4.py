@@ -11,7 +11,9 @@ import random
 import psycopg2
 from psycopg2.extensions import AsIs
 import psycopg2.extras
+import _mysql
 import sys
+
 
 # $mysqli = new mysqli("oniddb.cws.oregonstate.edu", "goncharn-db", $myPassword, "goncharn-db");
 rowNumber = 5
@@ -64,16 +66,34 @@ class Database(object):
 		rows = cur.fetchall()
 		return rows
 	
+	def get_row_id(self, table_name, value_selected):
+		conn = psycopg2.connect(con_string)
+		cur = conn.cursor()
+		try:
+			cur.execute("SELECT id FROM %s WHERE id = %s;", (AsIs(table_name), value_selected))
+			row_id = cur.fetchone()[0]
+			cur.close()
+			return row_id
+		except:
+			cur.close()
+			return 0
+
 	def closeConn(self):
 		self.conn.close()
 
 
 	def add_record(self, table_name, col_1, col_2, col_3, col_4, col_5):
+		
 		conn = psycopg2.connect(con_string)
         	cur = conn.cursor()
-        	cur.execute('INSERT INTO %s (%s, %s, %s, %s, %s) \
-                	    VALUES(%s, %s, %s, %s, %s)' % ("%s" % table_name, col_1, col_2, col_3, col_4, col_5,\
-				col_1.value, col_2.value, col_3.value, col_4.value, col_5.value))
+		
+		#puts single parenthesis around variable- needed for inserting strings
+   		col2 = wrap_and_encode(col_2.value)
+		col4 = wrap_and_encode(col_4.value)
+	
+		cur.execute('INSERT INTO %s (%s, %s, %s, %s, %s) VALUES (%s, %s, %s, %s, %s)' % (AsIs(table_name), col_1.name, col_2.name, col_3.name, col_4.name, col_5.name,\
+												col_1.value, col2, col_3.value, col4, col_5.value))
+		conn.commit()
 		cur.close()
     
 	def update_record(self, record_id, last_name = '', other_names='', email_address=''):
@@ -84,12 +104,15 @@ class Database(object):
                                                         record_id))
 	        db.commit()
         	c.close()    
-	def delete_record(self, record_id):
-        	db = sqlite3.connect(self.dbfilename)
-        	c = db.cursor()
-        	c.execute('DELETE FROM table_name where record_internal_id=?', (record_id,))
-        	db.commit()
-   		c.close()    
+
+	def delete_record(self, table_name, record_id):
+		conn = psycopg2.connect(con_string)
+        	cur = conn.cursor()
+        	cur.execute('DELETE FROM %s where id=%s', (AsIs(table_name), record_id,))
+		conn.commit()
+   		cur.close()
+		npyscreen.notify_confirm("Deleted Row")
+    
 #I was working on the following 2 methods: list_all_records, get_record   Will have to change to accept different tables   
 	def list_all_records(self, ):
         	db = psycopg2.connect(con_string)
@@ -109,7 +132,8 @@ class Database(object):
         	cursor.close()
 		return memory
 	       
-
+def wrap_and_encode(x):
+	return ("'%s'" % x)
 
 '''**************************************************
    Class MyGrid inherits GridColTitles class
@@ -150,6 +174,7 @@ class TableList(npyscreen.MultiLineAction):
 		self.parent.parentApp.myGridSet.table = selectedTableName
 		self.parent.parentApp.getForm('Menu').selectTable = selectedTableName	
 		self.parent.parentApp.getForm('Add Row').selectTable = selectedTableName
+		self.parent.parentApp.getForm('delete row').selectTable = selectedTableName
 		self.parent.parentApp.switchForm('Menu')
 
 		
@@ -180,7 +205,7 @@ class TableListDisplay(npyscreen.FormMutt):
    
    Purpose:  Displays main table menu and grid
 **************************************************'''													
-class TableMenuForm(npyscreen.ActionForm):
+class TableMenuForm(npyscreen.ActionFormWithMenus):
 	# set screen redirection based on user choice
 	def afterEditing(self):
 		selection = self.action.get_selected_objects()[0]
@@ -189,7 +214,26 @@ class TableMenuForm(npyscreen.ActionForm):
 		elif selection == 'Edit Row':
 			self.parentApp.setNextForm('Edit Row')
 		elif selection == 'Delete Row':
-			self.parentApp.setNextForm('Delete Row')
+		
+			#trying to put row id into an array and iterate over in addItem below to let user pick row in popup menu
+			#but the funciton deleteTheRow is called even though onSelect should only call it if the user selects it
+			#so far issue is not resolved.
+			#also if menus are used in TableMenuForm, we will have to change the other options to accomodate this
+			#otherwise you can access the menu before picking the delete option
+			#right not I left the implementaton for a different page
+			#self.row = 1
+			#self.menu = self.new_menu(name="Delete Row")
+			#self.menu.addItemsFromList([
+                        #("Display text", self.whenDisplayText, None, None, ("Delete Row?",)),
+                        #("Exit Menu", self.exit_menu, "e"),
+			#("row delete", self.deleteTheRow(row)),
+			#])
+			#for x in range (0, 5):
+			#	self.menu.addItem(text=str(self.row), onSelect=self.deleteTheRow())
+			#	self.row += 1
+		
+			#self.edit()
+			self.parentApp.setNextForm('delete row')
 		elif selection == 'Next Page':
 			self.parentApp.setNextForm('Next Page')
 		elif selection == 'Prev Page':
@@ -207,22 +251,10 @@ class TableMenuForm(npyscreen.ActionForm):
 		self.action = self.add(npyscreen.TitleSelectOne, max_height=5, name='Select Action',\
 					values = ['Next Page', 'Prev Page', 'Add Row', 'Edit Row', 'Delete Row'],\
 					scroll_exit = True #Let the user move out of the widget by pressing 																		# the down arrow instead of tab.  Try it without to see the difference.
-																		)
+					)
 		# move one line down from  the previous form
 		self.nextrely += 1
-		# Create MyGrid Widget object
-#		self.myGrid =  self.add(MyGrid, col_titles = ['1','2','3','4'])
-#		# populate the grid
-#		self.myGrid.values = []
-#		for x in range(rowNumber):
-#			row = []
-#			for y in range(4):
-#				if bool(random.getrandbits(1)):
-#					row.append("PASS")
-#				else:
-#					row.append("FAIL")
-#			self.myGrid.values.append(row)
-	
+			
 	def beforeEditing(self):
 		if self.selectTable:
 			self.name = "%s" % self.selectTable
@@ -233,45 +265,79 @@ class TableMenuForm(npyscreen.ActionForm):
                		# initialize and populate the grid
    	     		self.theGrid.values = []
 			myrow = []
-			#get one record (row) and put that in the grid
 			theOne = self.parentApp.myDatabase.get_record()
 			self.theGrid.values.append(theOne)#[0]
 
-			#the following are different tests for listing data from list_all_reccords
-			#currently left off at trying to figure out how to parse the tuple that is data comes in, which seems to be what get_record does
-			#I figured out get_record last, so the answer may lie there, or maybe it has to do with how the table was created?  not sure yet..
+	def deleteTheRow(self):
+		if self.selectTable and self.row:
+                        self.the_row_id = self.parentApp.myDatabase.get_row_id(self.selectTable, self.row)
+                        if self.the_row_id:
+                                npyscreen.notify_ok_cancel("Delete Row?")
+                                self.parentApp.myDatabase.delete_record(self.selectTable, self.the_row_id)
+                        elif self.the_row_id == 0:
+                                npyscreen.notify_confirm("Row does not exist")
 
-			#test1
-#			for z in theList:
-#				myrow.append(theList[z])
-#			self.myGrid.values.append(myrow)	
-#
-			#test2
-#			for x in range(rowNumber):
-#				row = []
-#				for y in range(4):
-#					row.append(theList[y])
-#				self.myGrid.values.append(row)
-#	
-			#test3
-#   	        	for x in range(rowNumber):
-#                     		row = []
-#                        	for y in range(4):
-#                        		row.append(theList[x])
-#                        	self.myGrid.values.append(row)
-		#return record
+        def whenDisplayText(self, argument):
+                npyscreen.notify_ok_cancel(argument)
 
-#		else:
-#			self.name = "New Record"
-			
-		#return self.action.value;
-		#self.how_exited_handers[npyscreen.wgwidget.EXITED_ESCAPE]  = self.exit_application
-		
+	def exit_menu(self):
+		self.editing = False
+
 	def exit_application(self):
 		curses.beep()
 		self.parentApp.setNextForm(None)
 		self.editing = False
 
+'''*********************************************************
+   Class deleteForm  inherits FormWithMenus class
+
+   Purpose:  Reponsible for deleting a row  to the given table
+*********************************************************'''
+class deleteForm(npyscreen.FormWithMenus):
+	def create(self):
+		self.selectTable = None
+		self.add(npyscreen.TitleText, name = "Press ctrl-x to enter menu", editable = False)
+		self.rowPicked = self.add(npyscreen.TitleText, name =  "But first enter row id number from the row you want to delete and press OK...")
+		self.how_exited_handers[npyscreen.wgwidget.EXITED_ESCAPE] = self.exit_application
+		
+		self.m1 = self.add_menu(name="Main menu", shortcut="^m")
+		self.m1.addItemsFromList([
+			("Display text", self.whenDisplayText, None, None, ("Delete Row?",)),
+			("Delete Row", self.deleteTheRow, "d"),
+			("Exit application", self.exit_application, "e"),
+		])
+		
+		#testing more popup menus
+		#self.m2 = self.add_menu(name="another menu", shortcut="^b")
+		#self.m2.addItemsFromList([
+		#	("Beep", self.whenJustBeep),
+		#])
+
+		#self.m3 = self.m2.addNewSubmenu("A sub menu", "^F")
+        	#self.m3.addItemsFromList([
+            	#	("Just Beep",   self.whenJustBeep),
+        	#])    
+
+	def deleteTheRow(self):
+		if self.selectTable and self.rowPicked:
+			self.row_id = self.parentApp.myDatabase.get_row_id(self.selectTable, self.rowPicked.value)
+			if self.row_id:
+				if(npyscreen.notify_ok_cancel("Delete Row?") == True):
+					self.parentApp.myDatabase.delete_record(self.selectTable, self.row_id)
+			elif self.row_id == 0:
+				npyscreen.notify_confirm("Row does not exist")
+
+	def whenDisplayText(self, argument):
+ 		npyscreen.notify_ok_cancel(argument)
+
+        #def whenJustBeep(self):
+    	#	curses.beep()
+
+	def exit_application(self):
+       		self.parentApp.setNextForm(None)
+        	self.editing = False
+        	#self.parentApp.switchFormNow()
+		self.parentApp.switchForm('Menu')
 
 '''*********************************************************
    Class AddRowForm inherits ActionForm class
@@ -281,61 +347,61 @@ class TableMenuForm(npyscreen.ActionForm):
 class AddRowForm(npyscreen.ActionForm):
 	def afterEditing(self):
 		self.parentApp.setNextFormPrevious()
+		self.columns_list = self.parentApp.myDatabase.list_columns(self.selectTable)
+               
 	# It's just prototype, non-dynamic
 	def create(self):
 		self.value = None
+		self.sort_column = ''
 		self.selectTable = None
-		self.myArr = None
-		self.myGrid =  self.add(MyGrid, col_titles = [], select_whole_line = True, max_height=12)#, scroll_exit = True)
+		self.col_name = []
+		self.myArr = {}
+		self.columns_list = []
+                k = 0
+                x = 0
+                while k < 10:
+                	k = x
+                        x += 1
+                        value = x
+                        self.myArr[k] = value
+                        k += 1
 		
+		self.table = self.add(npyscreen.TitleText, name="Add Row", editable=False)
+
 	def beforeEditing(self):
 		if self.selectTable:
-			#self.name = "Table '%s'" % self.selectTable
+			self.name = "%s" % self.selectTable
+			self.col_name = {}
 			self.columns_list = self.parentApp.myDatabase.list_columns(self.selectTable)
-			self.myGrid.col_titles = self.columns_list			
+                        for y in range (0, 5):
+                                self.col_name[y] = self.columns_list[y]
+                                self.col_name[y] = self.add(npyscreen.TitleText, name = self.col_name[y])
 
-			# update query params from DridSettings
+
+			self.myGrid = self.add(MyGrid, relx=10, rely=15, width=95, column_width=10, col_margin=5, scroll_exit=True)
+
+                        # initialize and populate the grid
+                        self.myGrid.values = []
 			self.limit = self.parentApp.myGridSet.limit
 			self.offset = self.parentApp.myGridSet.offset
 			self.sort_direction = self.parentApp.myGridSet.sort_direction
-			self.sort_column = self.parentApp.myGridSet.column
+			self.columns_list = self.parentApp.myDatabase.list_columns(self.selectTable)
+
+			#self.sort_column = self.parentApp.myGridSet.sort_column
 			# when called with default settings
 			if self.sort_column == '':
-				self.sort_column = self.columns_list
+				self.sort_column = self.columns_list[0]
 
-			self.myGrid.values = []
-			self.rows = []
-			self.myGrid.default_column_number = 5
-#			if len(self.columns_list) > 0:
-#				self.rows = self.parentApp.myDatabase.list_records(self.selectTable, self.sort_column, self.sort_direction, self.offset, self.limit)
-#			for row in self.rows:
-#				self.myGrid.values.append(row)		
-
-			self.myArr = {}
-		        k = 0
-                	x = 0
-                	while k < 10:
-                        	k = x
-                        	x += 1
-                        	value = x
-                        	self.myArr[k] = value
-                        	k += 1
-
-                        self.name = "%s" % self.selectTable
-			self.table = self.add(npyscreen.TitleText, name = "Add Row", editable = False)
+			self.rows = self.parentApp.myDatabase.list_records(self.selectTable, self.sort_column, self.sort_direction, self.offset, self.limit)
+			self.parentApp.myGridSet.rows = self.rows
+                   
 			
-			#for y in range (0,5):
-			#	z = str(self.myArr[y])
-			#	self.myArr[y] = self.add(npyscreen.TitleText, name = "Column " + z + ":")
-			#	y += 1
 
-			self.col_name = {}
-			for y in range (0, self.myGrid.default_column_number):
-				self.col_name[y] = self.columns_list[y]
-				self.col_name[y] = self.add(npyscreen.TitleText, name = self.col_name[y])   
-
+			for row in self.parentApp.myGridSet.rows:
+				self.myGrid.values.append(row)
+		
 	def on_ok(self):
-		if self.selectTable:
+		if self.selectTable:		
 			self.parentApp.myDatabase.add_record(self.selectTable, self.col_name[0], self.col_name[1], self.col_name[2],\
 								 self.col_name[3], self.col_name[4])
 			
@@ -400,6 +466,7 @@ class MyApplication(npyscreen.NPSAppManaged):
 		tabMenuF = self.addForm('Menu', TableMenuForm, name='Table Menu')
 		addRowF = self.addForm('Add Row', AddRowForm, name='Add Row')
 		GridSetF = self.addForm('GridSet', GridSetForm, name='Pagination Settings')
+		deleteRowF = self.addForm('delete row', deleteForm, name='delete row')
 
 if __name__ == '__main__':
     TestApp = MyApplication().run()
